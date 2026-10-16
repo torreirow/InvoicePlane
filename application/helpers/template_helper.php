@@ -33,14 +33,19 @@ function render_template_view(string $template_subpath, array $data, bool $retur
         $has_ext   = (bool) pathinfo($template_subpath, PATHINFO_EXTENSION);
         $file_path = CUSTOM_TEMPLATES_FOLDER . $template_subpath . ($has_ext ? '' : '.php');
         if (file_exists($file_path)) {
-            extract($data);
-            ob_start();
-            include $file_path;
-            $output = ob_get_clean();
+            $CI = &get_instance();
+            // Bind to the controller so templates can use $this, as with $CI->load->view().
+            $render = function (string $__file, array $__data): string {
+                extract($__data);
+                ob_start();
+                include $__file;
+
+                return ob_get_clean();
+            };
+            $output = Closure::bind($render, $CI, get_class($CI))($file_path, $data);
             if ($return) {
                 return $output;
             }
-            $CI = &get_instance();
             $CI->output->append_output($output);
 
             return;
@@ -463,11 +468,21 @@ function get_validated_template_path($template_name, $type = 'invoice', $scope =
     // Security: Both $type and $scope have been validated in layers 3-4 above (lines 242-251)
     // to ensure they only contain the values 'invoice'/'quote' and 'pdf'/'public' respectively.
     // This prevents path traversal attacks through the type/scope parameters.
-    $template_dir  = $type . '_templates/' . $scope;
-    $template_path = APPPATH . 'views/' . $template_dir . '/' . $validated_name . '.php';
+    $template_dir   = $type . '_templates/' . $scope;
+    $base_directory = APPPATH . 'views/' . $template_dir;
+    $template_path  = $base_directory . '/' . $validated_name . '.php';
+
+    // Custom templates take precedence over built-in ones, as in render_template_view().
+    if (CUSTOM_TEMPLATES_FOLDER) {
+        $custom_directory = CUSTOM_TEMPLATES_FOLDER . $template_dir;
+        $custom_path      = $custom_directory . '/' . $validated_name . '.php';
+        if (file_exists($custom_path)) {
+            $base_directory = $custom_directory;
+            $template_path  = $custom_path;
+        }
+    }
 
     // Defense-in-depth: Validate template path is within allowed directory before checking existence
-    $base_directory = APPPATH . 'views/' . $template_dir;
     if ( ! validate_file_in_directory($template_path, $base_directory)) {
         log_message('error', 'Template path validation failed: ' . sanitize_for_logging($validated_name));
         show_error('Template system error. Please contact administrator.', 500);
